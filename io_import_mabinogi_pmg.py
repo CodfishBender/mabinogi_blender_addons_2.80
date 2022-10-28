@@ -1,7 +1,7 @@
 bl_info= {
     "name": "Import Mabinogi Pleione Mesh Group",
     "author": "Tachiorz",
-    "version": (0, 1),
+    "version": (0, 2),
     "blender": (2, 80, 0),
     "location": "File > Import > Mabinogi Mesh Group (.pmg)",
     "description": "Imports a Mabinogi Mesh Group file",
@@ -409,7 +409,6 @@ class IMPORT_MABINOGI_pmg_prefs(AddonPreferences):
             layout = self.layout
             layout.label(text="Import PMG preferences")
             layout.prop(self, "materials_path")
-            layout.prop(self, "file_extension")
 
 
 def menu_func_mabinogi_pmg(self, context):

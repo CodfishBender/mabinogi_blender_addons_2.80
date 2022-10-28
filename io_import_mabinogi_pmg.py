@@ -2,7 +2,7 @@ bl_info= {
     "name": "Import Mabinogi Pleione Mesh Group",
     "author": "Tachiorz",
     "version": (0, 1),
-    "blender": (2, 5, 7),
+    "blender": (2, 80, 0),
     "location": "File > Import > Mabinogi Mesh Group (.pmg)",
     "description": "Imports a Mabinogi Mesh Group file",
     "warning": "",
@@ -176,10 +176,9 @@ def init_material_dict(root_path):
 def load_pmg(filename,
              context):
     '''Read the PMG file.'''
-
+    print (filename)
     name, ext= os.path.splitext(os.path.basename(filename))
     file= open(filename, 'rb')
-
 
     try:
         magic, version, head_size, mesh_name, subgroup_count = struct.unpack("<4shi128si", file.read(142))
@@ -224,7 +223,7 @@ def load_pmg(filename,
             if pm_version == 3 : pm.append(load_pm20(file, pm_version))
         pm_subgroups.append(pm)
 
-    addon_prefs = context.user_preferences.addons[__name__].preferences
+    addon_prefs = context.preferences.addons[__name__].preferences
     if material_dict is None:
         init_material_dict(addon_prefs.materials_path)
 
@@ -246,15 +245,14 @@ def load_pmg(filename,
                 edit_bones[bone_id] = eb[i]
         else:
             # todo: deselect
-            sel_ob.select = False
+            sel_ob.select_set(False)
             print("Selected object isn't armature")
             sel_ob = None
-    scn = context.scene
     prev_ob = None
     for sgi in range(len(pm_subgroups)):
         pm = pm_subgroups[sgi]
         if prev_ob is not None:
-            prev_ob.select = False
+            prev_ob.select_set(False)
             prev_ob = None
         for i in range(len(pm)):
             #Add to blender
@@ -282,30 +280,37 @@ def load_pmg(filename,
                     image = load_image(name + ".dds", material_dict[name], recursive=True, place_holder=True)
                 else:
                     image = load_image(name + ".dds", os.path.dirname(filename), recursive=True, place_holder=True)
+                print(image)
                 texture = bpy.data.textures.new(name=name, type='IMAGE')
                 texture.image = image
+                # Create new material
                 material = bpy.data.materials.new(name=name)
-                material.use_shadeless = True
-                material.use_transparency = True
-                material.alpha = 0.0
-                mtex = material.texture_slots.add()
-                mtex.texture = texture
-                mtex.texture_coords = 'UV'
-                mtex.use_map_color_diffuse = True
-                mtex.use_map_alpha = True
+                material.use_nodes = True
+                material.shadow_method = 'NONE'
+                material.blend_method = 'OPAQUE'
+                # Add mat node
+                bsdf = material.node_tree.nodes["Principled BSDF"]
+                bsdf.inputs[7].default_value = 0
+                # Add tex node
+                texImage = material.node_tree.nodes.new('ShaderNodeTexImage')
+                texImage.image = image
+                # Link together
+                material.node_tree.links.new(bsdf.inputs['Base Color'], texImage.outputs['Color'])
+                material.node_tree.links.new(bsdf.inputs['Alpha'], texImage.outputs['Alpha'])
             else:
                 material = bpy.data.materials[name]
-                image = material.texture_slots[0].texture.image
+                image = bpy.data.images[name + ".dds"]
+                
             bmesh.materials.append(material)
             #add textures
-            bmesh.uv_textures.new()
+            bmesh.uv_layers.new()
             uvl = bmesh.uv_layers.active.data[:]
             for v in range(pm[i].faceVertexCount):
                 idx = pm[i].vertexList[v]
                 uvl[v].uv = (pm[i].vertexArray[idx].u, 1-pm[i].vertexArray[idx].v)
                 #print(pm[i].vertexArray[idx].u,pm[i].vertexArray[idx].v)
-            for face in bmesh.uv_textures[0].data:
-                face.image = image
+            #for face in bmesh.uv_layers[0].data:
+            #    face.image = image
             bmesh.validate()
             bmesh.update()
             ob = bpy.data.objects.new(pm[i].mesh_name + "_subgroup" + str(sgi), bmesh)
@@ -318,7 +323,7 @@ def load_pmg(filename,
                 ob.matrix_world = bone_M * pm[i].MinorMatrix
             else:
                 ob.matrix_world = pm[i].MajorMatrix
-            scn.objects.link(ob)
+            bpy.context.collection.objects.link(ob)
             #add skins
             skinList = list()
             for s in pm[i].skinArray:
@@ -337,9 +342,9 @@ def load_pmg(filename,
                 #if bone is None: bone = armature.bones.get('-' + pm[i].bone_name)
                 #if bone is not None:
                 #    vgroup.name = bone.name
-            ob.select = True
-            if prev_ob is not None: prev_ob.select = True
-            bpy.context.scene.objects.active = ob
+            ob.select_set(True)
+            if prev_ob is not None: prev_ob.select_set(True)
+            context.view_layer.objects.active = ob
             bpy.ops.object.join()
             bpy.ops.object.mode_set(mode='EDIT')
             bpy.ops.mesh.remove_doubles(threshold=0.1)
@@ -354,25 +359,34 @@ def load_pmg(filename,
     file.close()
 
 
-from bpy.props import StringProperty
-
-class IMPORT_MABINOGI_pmg(bpy.types.Operator):
+from bpy_extras.io_utils import ImportHelper
+from bpy.props import StringProperty, CollectionProperty
+from bpy.types import Operator, OperatorFileListElement
+class IMPORT_MABINOGI_pmg(Operator, ImportHelper):
     '''Import PMG Operator.'''
     bl_idname= "import.pmg"
     bl_label= "Import PMG"
     bl_description= "Import a Mabinogi Mesh Group file"
     bl_options= {'REGISTER', 'UNDO'}
 
-    filepath= StringProperty(name="File Path", description="Filepath used for importing the PMG file", maxlen=1024, default="")
+    #filepath: StringProperty(name="File Path", description="Filepath used for importing the PMG file", maxlen=1024, default="")
     
-    filter_glob = StringProperty(
+    filter_glob: StringProperty(
         default = "*.pmg",
         options = {'HIDDEN'},
     )
     
+    files: CollectionProperty(
+        name='File paths', 
+        type=OperatorFileListElement,
+    )
+    
+    directory: StringProperty(subtype='DIR_PATH')
+    
     def execute(self, context):
-        load_pmg(self.filepath,
-                 context)
+        for file in self.files:
+            filepath = os.path.join(self.directory, file.name)
+            load_pmg(filepath, context)
         return {'FINISHED'}
 
     def invoke(self, context, event):
@@ -380,11 +394,13 @@ class IMPORT_MABINOGI_pmg(bpy.types.Operator):
         wm.fileselect_add(self)
         return {'RUNNING_MODAL'}
 
-
-class IMPORT_MABINOGI_pmg_prefs(bpy.types.AddonPreferences):
+from bpy.types import Operator, AddonPreferences
+from bpy.props import StringProperty
+class IMPORT_MABINOGI_pmg_prefs(AddonPreferences):
     '''Import PMG preferences.'''
     bl_idname = __name__
-    materials_path = StringProperty(
+    
+    materials_path: StringProperty(
         name="Path to materials:",
         subtype='DIR_PATH'
     )
@@ -393,23 +409,26 @@ class IMPORT_MABINOGI_pmg_prefs(bpy.types.AddonPreferences):
             layout = self.layout
             layout.label(text="Import PMG preferences")
             layout.prop(self, "materials_path")
+            layout.prop(self, "file_extension")
 
 
 def menu_func_mabinogi_pmg(self, context):
     self.layout.operator(IMPORT_MABINOGI_pmg.bl_idname, text="Mabinogi Mesh Group (.pmg)")
 
 def register():
+    from bpy.utils import register_class
     global material_dict
     material_dict = None
-    bpy.utils.register_module(__name__)
-
-    bpy.types.INFO_MT_file_import.append(menu_func_mabinogi_pmg)
+    register_class(IMPORT_MABINOGI_pmg)
+    register_class(IMPORT_MABINOGI_pmg_prefs)
+    bpy.types.TOPBAR_MT_file_import.append(menu_func_mabinogi_pmg)
 
 
 def unregister():
-    bpy.utils.unregister_module(__name__)
-
-    bpy.types.INFO_MT_file_import.remove(menu_func_mabinogi_pmg)
+    from bpy.utils import unregister_class
+    unregister_class(IMPORT_MABINOGI_pmg)
+    unregister_class(IMPORT_MABINOGI_pmg_prefs)
+    bpy.types.TOPBAR_MT_file_import.remove(menu_func_mabinogi_pmg)
 
 if __name__ == "__main__":
     register()
